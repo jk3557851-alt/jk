@@ -1,0 +1,1618 @@
+/**
+ * assets/configurator.js (v47-final-clean)
+ *
+ * Complete clean version with:
+ * 1. Fixed scroll positioning
+ * 2. Proper crossfade implementation
+ * 3. Clean removeGroupImagesExcept function
+ *
+ * Drop-in replacement - overwrite and hard-refresh.
+ */
+
+(function () {
+  // ---------- CONFIG ----------
+  const MANIFEST_URL =
+    "https://pub-f4cb02b8e89142f99c9934fe7a770cd6.r2.dev/staging/assets/manifest-mapped.json?v=46";
+  const ASSET_ROOT = "https://hell.magedtionary.workers.dev/";
+
+  const LEFT_COL_WIDTH = 360;
+  const PAGE_GAP = 64;
+  const VIEWER_MAX = 1100;
+
+  const THUMB_SCALE = 1.35;
+  const THUMB_BASE = 64;
+  const THUMB_SIZE = Math.round(THUMB_BASE * THUMB_SCALE);
+
+  const WATCH_CENTER_LEFT_PCT = 60;
+  const WATCH_SCALE = 0.22;
+
+  const PRELOAD_CONCURRENCY = 6;
+  const THUMB_PRELOAD_CONCURRENCY = 3;
+  const THUMB_EAGER_COUNT = 6;
+  const LAYER_FADE_MS = 260;
+  const RENDER_DEBOUNCE_MS = 60;
+  const FETCH_RETRY_MAX = 3;
+  const FETCH_BACKOFF_BASE = 200;
+
+  const rootSelector = ".configurator-root";
+
+  const STATIC_KEY_MAP = {
+    m01: "oak",
+    m02: "santeiko",
+    m03: "nautiko",
+    m04: "seikojust",
+    m05: "seikomariner",
+    m06: "seikonaut",
+    m07: "seitona",
+  };
+
+  const PRODUCT_THUMBNAILS = {
+    m01: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_1.png",
+    m02: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_2.png",
+    m03: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_3.png",
+    m04: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_4.png",
+    m05: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_5.png",
+    m06: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_6.png",
+    m07: ASSET_ROOT + "main%20page%20watch%20assets/Screenshot_7.png",
+  };
+
+  const imageBlobCache = new Map();
+  const imageBitmapCache = new Map();
+  const thumbBlobCache = new Map();
+  const thumbBlobUrlCache = new Map();
+  const fetchFailures = new Map();
+
+(function injectConfiguratorStyles() {
+    try {
+      const viewerCalc = `calc(100vw - ${LEFT_COL_WIDTH + PAGE_GAP}px)`;
+      const css = `
+      .configurator-root { box-sizing: border-box; width: 100vw !important; max-width: none !important; margin-left: calc(50% - 50vw) !important; margin-right: calc(50% - 50vw) !important; display: grid; grid-template-columns: ${LEFT_COL_WIDTH}px 1fr; gap: ${PAGE_GAP}px; align-items: start; padding: 0 !important; background: transparent; z-index: 1; }
+.configurator-sidebar { background: #fff; padding: 20px; box-sizing: border-box; height: 100vh; overflow-y: auto; grid-column: 1; width: ${LEFT_COL_WIDTH}px; display: block; position: relative; border: 2px solid #000 !important; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); margin: 20px; }      .configurator-sidebar .configurator-title { font-size: 28px; font-weight: 300; margin-bottom: 14px; color: #111; }
+      .configurator-group { padding: 8px 0 18px 0; margin: 0 0 18px 0; border-bottom: 1px solid rgba(0,0,0,0.06); box-sizing: border-box; }
+      .configurator-group h4 { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin:0 0 10px 0; font-size:14px; padding: 0 6px; }
+      .configurator-group h4 .group-title { font-weight:600; text-transform:none; }
+      .configurator-thumbs { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+      .configurator-thumb { width: ${THUMB_SIZE}px; height: ${THUMB_SIZE}px; display:inline-flex; align-items:center; justify-content:center; background:#fff; padding:6px; border-radius:12px; box-shadow: 0 6px 18px rgba(0,0,0,0.06); border: 1px solid rgba(0,0,0,0.06); cursor:pointer; transition: transform 140ms ease, box-shadow 140ms ease; }
+      .configurator-thumb img { width:100%; height:100%; object-fit:contain; display:block; pointer-events:none; }
+.configurator-viewer-wrap { position: fixed !important; top: 0 !important; right: 0 !important; width: calc(100vw - ${LEFT_COL_WIDTH}px) !important; height: 100vh !important; display:flex !important; justify-content:center !important; align-items:center !important; overflow:visible !important; padding:0 !important; z-index: 40 !important; pointer-events: auto !important; }
+.configurator-viewer-wrap > .configurator-add-button { pointer-events: auto !important; }      
+      .configurator-viewer { position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; width: ${viewerCalc} !important; max-width: ${VIEWER_MAX}px !important; margin: 0 !important; min-width: 360px; min-height: 480px; box-sizing: border-box; padding: 0 24px; overflow: visible; background: transparent; pointer-events: auto !important; }
+      .configurator-viewer img.layer { position: fixed !important; top: 50% !important; left: 50% !important; transform-origin: 50% 50% !important; opacity: 0; pointer-events: none; max-height: calc(90vh); max-width: 100%; transition: opacity ${LAYER_FADE_MS}ms ease !important; z-index: 30 !important; }
+      .configurator-viewer img.layer.visible { opacity: 1; }
+.configurator-add-button { position: static !important; margin-top: -250px !important; margin-left: auto !important; margin-right: -732.6px !important; width: auto !important; background:#111; color:#fff; padding:12px 30px; border-radius:4px; border:0; cursor:pointer; z-index:99 !important; pointer-events: auto !important; }
+@media (max-width: 1100px) { .configurator-root { grid-template-columns: 320px 1fr; } .configurator-viewer-wrap { width: calc(100vw - 320px) !important; } }
+      @media (max-width: 980px) { .configurator-root { grid-template-columns: 1fr; margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; } .configurator-sidebar, 
+      .configurator-meta { grid-column: 1; width: 100% !important; border-right: none !important; } .configurator-viewer-wrap { position: relative !important; width: 100% !important; height: auto !important; top: auto !important; right: auto !important; } .configurator-viewer { position: relative !important; top: auto !important; left: auto !important; transform: none !important; width: 100% !important; min-width: auto; max-width: none; padding: 12px; justify-content: center !important; } .configurator-viewer img.layer { position: relative !important; left: auto !important; top: auto !important; transform: none !important; max-height: 60vh; } }
+      `;
+      const s = document.createElement("style");
+      s.setAttribute("data-configurator-style", "v47-final");
+      s.appendChild(document.createTextNode(css));
+      (document.head || document.documentElement).appendChild(s);
+    } catch (e) {
+      console.warn("Inject style failed", e);
+    }
+  })();
+
+  function makeAbsUrl(filePath) {
+    if (!filePath) return "";
+    if (/^https?:\/\//i.test(filePath)) return filePath;
+    const rel = String(filePath).replace(/^assets\//i, "").replace(/^\//, "");
+    const encoded = rel.split("/").map(encodeURIComponent).join("/");
+    return ASSET_ROOT + encoded;
+  }
+
+  function extractLayers(obj) {
+    if (!obj) return null;
+    if (Array.isArray(obj)) return obj;
+    if (obj.views && obj.views.vf) {
+      if (Array.isArray(obj.views.vf)) return obj.views.vf;
+      if (obj.views.vf && Array.isArray(obj.views.vf.layers)) return obj.views.vf.layers;
+    }
+    if (Array.isArray(obj.layers)) return obj.layers;
+    return null;
+  }
+
+  function resolveModelByKey(manifest, requested) {
+    if (!manifest || typeof manifest !== "object") return null;
+    const req = (requested || "").toString().trim().toLowerCase();
+    if (req && manifest[req]) return { key: req, model: manifest[req] };
+    for (const k of Object.keys(manifest)) {
+      const m = manifest[k];
+      if (!m) continue;
+      const candNames = [];
+      if (m.id) candNames.push(String(m.id).toLowerCase());
+      if (m.name) candNames.push(String(m.name).toLowerCase());
+      if (m.brand) candNames.push(String(m.brand).toLowerCase());
+      if (candNames.includes(req)) return { key: k, model: m };
+    }
+    if (req) {
+      for (const k of Object.keys(STATIC_KEY_MAP)) {
+        if (String(STATIC_KEY_MAP[k]).toLowerCase() === req && manifest[k]) return { key: k, model: manifest[k] };
+      }
+    }
+    if (req) {
+      for (const k of Object.keys(manifest)) {
+        const m = manifest[k];
+        const joined = ((m.name || "") + " " + (m.brand || "") + " " + (m.id || "")).toLowerCase();
+        if (req && joined.indexOf(req) !== -1) return { key: k, model: m };
+      }
+    }
+    const firstKey = Object.keys(manifest)[0];
+    if (firstKey) return { key: firstKey, model: manifest[firstKey] };
+    return null;
+  }
+
+  function normalizeBrandedManifest(raw) {
+    if (!raw || typeof raw !== "object") return {};
+    const anyHasViews = Object.keys(raw).some(
+      (k) => raw[k] && typeof raw[k] === "object" && raw[k].views && typeof raw[k].views === "object"
+    );
+    if (anyHasViews) return raw;
+    const map = {};
+    Object.keys(raw).forEach((brand) => {
+      const brandObj = raw[brand];
+      if (!brandObj || typeof brandObj !== "object") return;
+      const vfLayers = extractLayers(brandObj.views && brandObj.views.vf ? brandObj.views.vf : brandObj);
+      if (Array.isArray(vfLayers) && vfLayers.length) {
+        const modelId = String(brand).toLowerCase();
+        map[modelId] = map[modelId] || {};
+        map[modelId].views = map[modelId].views || {};
+        map[modelId].views.vf = { layers: vfLayers.slice() };
+        map[modelId].brand = brand;
+        return;
+      }
+      Object.keys(brandObj).forEach((k) => {
+        const cand = brandObj[k];
+        if (!cand || typeof cand !== "object") return;
+        const candLayers = extractLayers(cand.views && cand.views.vf ? cand.views.vf : cand);
+        if (Array.isArray(candLayers) && candLayers.length) {
+          const modelId = (cand.id || cand.name || `${brand}-${k}`)
+            .toString()
+            .toLowerCase()
+            .replace(/[^a-z0-9-_]+/gi, "-");
+          map[modelId] = map[modelId] || {};
+          map[modelId].views = map[modelId].views || {};
+          map[modelId].views.vf = { layers: candLayers.slice() };
+          map[modelId].brand = brand;
+          Object.keys(cand).forEach((pk) => {
+            if (pk !== "views") map[modelId][pk] = cand[pk];
+          });
+          return;
+        }
+        if (cand.file || cand.name) {
+          const mid = String(brand).toLowerCase();
+          map[mid] = map[mid] || { views: {} };
+          map[mid].views.vf = map[mid].views.vf || { layers: [] };
+          map[mid].views.vf.layers.push(Object.assign({}, cand));
+          map[mid].brand = brand;
+          return;
+        }
+        if (Array.isArray(cand.layers) && cand.layers.length) {
+          const modelId = (cand.id || cand.name || `${brand}-${k}`)
+            .toString()
+            .toLowerCase()
+            .replace(/[^a-z0-9-_]+/gi, "-");
+          map[modelId] = map[modelId] || {};
+          map[modelId].views = map[modelId].views || {};
+          map[modelId].views.vf = { layers: cand.layers.slice() };
+          map[modelId].brand = brand;
+          return;
+        }
+      });
+    });
+    if (Object.keys(map).length === 0 && Array.isArray(raw)) {
+      raw.forEach((entry, idx) => {
+        const id = (entry && (entry.id || entry.name)) || `model-${idx + 1}`;
+        const modelId = id.toString().toLowerCase().replace(/[^a-z0-9-_]+/gi, "-");
+        map[modelId] = map[modelId] || {};
+        map[modelId].views = map[modelId].views || {};
+        if (Array.isArray(entry.layers)) map[modelId].views.vf = { layers: entry.layers.slice() };
+        else map[modelId].views.vf = { layers: [entry] };
+      });
+    }
+    return map;
+  }
+
+  function fetchManifest() {
+    return fetch(MANIFEST_URL, { cache: "no-cache" }).then((r) => {
+      if (!r.ok) throw new Error("Manifest fetch failed " + r.status);
+      return r.json();
+    }).then((raw) => normalizeBrandedManifest(raw));
+  }
+
+  async function fetchWithRetry(url, opts = {}, attempt = 0) {
+    try {
+      const res = await fetch(url, Object.assign({ mode: "cors", cache: "default" }, opts));
+      if (!res.ok) {
+        const err = new Error("HTTP " + res.status);
+        err.response = res;
+        throw err;
+      }
+      return res;
+    } catch (err) {
+      const count = attempt + 1;
+      if (count <= FETCH_RETRY_MAX) {
+        const backoff = FETCH_BACKOFF_BASE * Math.pow(2, attempt);
+        await new Promise((r) => setTimeout(r, backoff));
+        return fetchWithRetry(url, opts, count);
+      }
+      fetchFailures.set(url, { count: attempt + 1, lastError: String(err) });
+      throw err;
+    }
+  }
+
+  async function fetchAndDecode(src) {
+    if (imageBitmapCache.has(src)) return imageBitmapCache.get(src);
+    try {
+      const r = await fetchWithRetry(src, { mode: "cors", cache: "default" });
+      const blob = await r.blob();
+      imageBlobCache.set(src, blob);
+      if (window.createImageBitmap) {
+        const bitmap = await createImageBitmap(blob);
+        imageBitmapCache.set(src, bitmap);
+        return bitmap;
+      } else {
+        await decodeWithImgElement(src);
+        imageBitmapCache.set(src, true);
+        return true;
+      }
+    } catch (err) {
+      try {
+        await decodeWithImgElement(src);
+        imageBitmapCache.set(src, true);
+        return true;
+      } catch (e) {
+        throw err;
+      }
+    }
+    function decodeWithImgElement(s) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.decoding = "async";
+        img.onload = () => resolve(true);
+        img.onerror = () => reject(new Error("Image load error: " + s));
+        img.src = s;
+      });
+    }
+  }
+
+  function createPreloadQueue(concurrency) {
+    const q = [];
+    let running = 0;
+    function runNext() {
+      if (!q.length || running >= concurrency) return;
+      const item = q.shift();
+      running++;
+      fetchAndDecode(item.src)
+        .then((res) => {
+          running--;
+          item.resolve(res);
+          runNext();
+        })
+        .catch((err) => {
+          running--;
+          item.reject(err);
+          runNext();
+        });
+    }
+    return {
+      enqueue(src) {
+        if (!src) return Promise.reject(new Error("No src"));
+        if (imageBitmapCache.has(src)) return Promise.resolve(imageBitmapCache.get(src));
+        return new Promise((resolve, reject) => {
+          q.push({ src, resolve, reject });
+          setTimeout(runNext, 0);
+        });
+      },
+    };
+  }
+  const preloadQueue = createPreloadQueue(PRELOAD_CONCURRENCY);
+  function preloadImage(src) { return preloadQueue.enqueue(src); }
+
+  function createBlobPreloadQueue(concurrency) {
+    const q = [];
+    let running = 0;
+    function runNext() {
+      if (!q.length || running >= concurrency) return;
+      const item = q.shift();
+      running++;
+      fetchWithRetry(item.url, { mode: "cors", cache: "default" })
+        .then((r) => r.blob())
+        .then((blob) => {
+          try { thumbBlobCache.set(item.url, blob); } catch (e) {}
+          const obj = URL.createObjectURL(blob);
+          try { thumbBlobUrlCache.set(item.url, obj); } catch (e) {}
+          running--;
+          item.resolve(obj);
+          runNext();
+        })
+        .catch((err) => {
+          running--;
+          item.reject(err);
+          runNext();
+        });
+    }
+    return {
+      enqueue(url) {
+        if (!url) return Promise.reject(new Error("No url"));
+        if (thumbBlobUrlCache.has(url)) return Promise.resolve(thumbBlobUrlCache.get(url));
+        if (thumbBlobCache.has(url)) {
+          try {
+            const obj = URL.createObjectURL(thumbBlobCache.get(url));
+            thumbBlobUrlCache.set(url, obj);
+            return Promise.resolve(obj);
+          } catch (e) {}
+        }
+        return new Promise((resolve, reject) => {
+          q.push({ url, resolve, reject });
+          setTimeout(runNext, 0);
+        });
+      },
+    };
+  }
+  const thumbQueue = createBlobPreloadQueue(THUMB_PRELOAD_CONCURRENCY);
+  function preloadThumbAsObjectUrl(url) { return thumbQueue.enqueue(url); }
+
+  window.addEventListener("unload", function () {
+    try { thumbBlobUrlCache.forEach((u) => URL.revokeObjectURL(u)); thumbBlobUrlCache.clear(); thumbBlobCache.clear(); } catch (e) {}
+  });
+
+  const thumbObserver = ("IntersectionObserver" in window) ? new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target; const fn = img._loadThumb;
+      if (typeof fn === "function") { fn(); img._loadThumb = null; }
+      thumbObserver.unobserve(img);
+    });
+  }, { root: null, rootMargin: "300px", threshold: 0.01 }) : null;
+
+  function attachThumbToButton(img, modelKey, opt, eager) {
+    let candidate = null;
+    if (opt && opt.thumb) candidate = opt.thumb;
+    else if (opt && opt.file) candidate = makeAbsUrl(opt.file);
+    if (!candidate && modelKey && PRODUCT_THUMBNAILS[modelKey]) candidate = PRODUCT_THUMBNAILS[modelKey];
+    if (!candidate) candidate = makeAbsUrl(opt && opt.file);
+
+    img.width = THUMB_SIZE;
+    img.height = THUMB_SIZE;
+    img.style.objectFit = "cover";
+    img.decoding = "async";
+    img.crossOrigin = "anonymous";
+    img.loading = eager ? "eager" : "lazy";
+    img.src = 'data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22' + img.width + '%22 height=%22' + img.height + '%22%3E%3Crect width=%22100%25%22 height=%22100%25%22 fill=%22%23f3f3f3%22/%3E%3C/svg%3E';
+    img.style.width = "100%";
+    img.style.height = "100%";
+
+    const absCandidate = candidate;
+    const loadFn = () => {
+      if (!absCandidate) return;
+      preloadThumbAsObjectUrl(absCandidate).then((objectUrl) => { img.src = objectUrl; }).catch(() => { img.src = absCandidate; });
+    };
+
+    if (eager) loadFn();
+    else if (thumbObserver) { img._loadThumb = loadFn; thumbObserver.observe(img); }
+    else setTimeout(loadFn, 600);
+  }
+
+  const tooltip = (function createTooltip() {
+    const el = document.createElement("div");
+    el.className = "configurator-tooltip";
+    document.body.appendChild(el);
+    return {
+      show(text, rect) {
+        el.textContent = text || "";
+        const pad = 10;
+        const x = Math.min(window.innerWidth - 14 - pad, rect.right + 8);
+        const y = Math.min(window.innerHeight - 14 - pad, rect.bottom + 12);
+        el.style.left = x + "px"; el.style.top = y + "px";
+        el.classList.add("visible");
+      },
+      hide() { el.classList.remove("visible"); }
+    };
+  })();
+
+  function debounce(fn, wait) { let t; return function(...args){ clearTimeout(t); t = setTimeout(()=>fn.apply(this,args), wait); }; }
+
+  function capitalizeWords(s) {
+    if (!s) return s;
+    return String(s).split(/[\s-_]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+
+function friendlyNameFromOption(opt){
+  if(!opt) return '';
+  
+  // Check if it's in tooltipConfig (handles both case and chronocase files)
+  let file = opt.file || '';
+  if(tooltipConfig[file]) {
+    return tooltipConfig[file].replace(/^[🥇⚪🖤🤎🔵🟠🟢🔴🟣🟡⚫✨\s]+/, '').trim();
+  }
+  
+  // If not found, try replacing chronocase with case path
+  if(file.includes('chronocase')) {
+    const altFile = file.replace('chronocase', 'case');
+    if(tooltipConfig[altFile]) {
+      return tooltipConfig[altFile].replace(/^[🥇⚪🖤🤎🔵🟠🟢🔴🟣🟡⚫✨\s]+/, '').trim();
+    }
+  }
+  
+  if(opt.name) return String(opt.name);
+  const f = file + '';
+  try {
+    const seg = f.split('/').pop() || f;
+    const noext = seg.replace(/\.[a-z0-9]{1,6}$/i,'');
+    const pretty = noext.replace(/[-_]+/g,' ').replace(/\s+/g,' ').trim();
+    return pretty.replace(/\b\w/g, ch => ch.toUpperCase());
+  } catch(e){ return f; }
+}
+  
+  // ========== CUSTOM TOOLTIP ADDRESSING SYSTEM / XO.0X ==========
+  const tooltipConfig = {
+    'oak/case/oak-cs-001.png': ' Black Case',
+    'oak/case/oak-cs-002.png': ' Rose Gold Case',
+    'oak/case/oak-cs-003.png': ' Silver Case',
+    'oak/case/oak-cs-004.png': ' Gold Case',
+    'oak/case/oak-cc-001.png': ' Chrono Black Case',
+    'oak/case/oak-cc-002.png': ' Chrono Silver Case',
+    
+    
+    'oak/dial/oak-dl-001.png': ' Blue Dial',
+    'oak/dial/oak-dl-002.png': ' White Dial',
+    'oak/dial/oak-dl-003.png': ' Black Dial',
+    'oak/dial/oak-dl-004.png': ' Orange Dial',
+    'oak/dial/oak-dl-005.png': ' Green Dial',
+    'oak/dial/oak-dl-006.png': ' Red Dial',
+    'oak/dial/oak-dl-007.png': ' Purple Dial',
+    'oak/dial/oak-dl-008.png': ' Gold Dial',
+    'oak/dial/oak-dl-009.png': ' Gunmetal Dial',
+    
+    'oak/hands/oak-hh-001.png': 'Silver Hands',
+    'oak/hands/oak-hh-002.png': '🥇 Gold Hands',
+    'oak/hands/oak-hh-003.png': ' Black Hands',
+    
+    'oak/secondhands/oak-se-001.png': 'Silver Second Hand',
+    'oak/secondhands/oak-se-002.png': 'Gold Second Hand',
+    'oak/secondhands/oak-se-003.png': 'Red Second Hand',
+    
+    'oak/chronodial/oak-cd-001.png': 'White Chrono Dial',
+    'oak/chronodial/oak-cd-002.png': 'Black Chrono Dial',
+    'oak/chronodial/oak-cd-003.png': 'Orange Chrono Dial',
+    'oak/chronodial/oak-cd-004.png': 'Blue Chrono Dial',
+    
+    'oak/chronohands/oak-ch-001.png': 'Gold Chrono Hand',
+   // ===================== SANTEIKO (m02) =====================
+    'santeiko/bracelet/santeiko-br-001.png': 'Black Bracelet',
+    
+    'santeiko/case/santeiko-cs-001.png': 'Black Case',
+    'santeiko/case/santeiko-cs-002.png': 'Silver Case',
+    
+    'santeiko/dial/santeiko-dl-001.png': 'Blue Dial',
+    'santeiko/dial/santeiko-dl-002.png': 'White Dial',
+    'santeiko/dial/santeiko-dl-003.png': 'Black Dial',
+    'santeiko/dial/santeiko-dl-004.png': 'Orange Dial',
+    'santeiko/dial/santeiko-dl-005.png': 'Green Dial',
+    'santeiko/dial/santeiko-dl-006.png': 'Red Dial',
+    'santeiko/dial/santeiko-dl-007.png': 'Purple Dial',
+    'santeiko/dial/santeiko-dl-008.png': 'Gold Dial',
+    
+    'santeiko/hands/santeiko-hh-001.png': 'Silver Hands',
+    'santeiko/hands/santeiko-hh-002.png': 'Gold Hands',
+    
+    'santeiko/second/santeiko-se-001.png': 'Silver Second Hand',
+    'santeiko/second/santeiko-se-002.png': 'Red Second Hand',
+
+    // ===================== NAUTIKO (m03) =====================
+    'nautiko/bracelet/nautiko-br-001.png': 'Black Bracelet',
+    'nautiko/bracelet/nautiko-br-002.png': 'Silver Bracelet',
+    'nautiko/bracelet/nautiko-br-003.png': 'Gold Bracelet',
+    'nautiko/bracelet/nautiko-br-004.png': 'Green Bracelet',
+    'nautiko/bracelet/nautiko-br-005.png': 'Blue Bracelet',
+    'nautiko/bracelet/nautiko-br-006.png': 'Orange Bracelet',
+    'nautiko/bracelet/nautiko-br-007.png': 'Red Bracelet',
+    'nautiko/bracelet/nautiko-br-008.png': 'Purple Bracelet',
+    
+    'nautiko/case/nautiko-cs-001.png': 'Black Case',
+    'nautiko/case/nautiko-cs-002.png': 'Silver Case',
+    'nautiko/case/nautiko-cs-003.png': 'Gold Case',
+    
+    'nautiko/dial/nautiko-dl-001.png': 'Blue Dial',
+    'nautiko/dial/nautiko-dl-002.png': 'White Dial',
+    'nautiko/dial/nautiko-dl-003.png': 'Black Dial',
+    'nautiko/dial/nautiko-dl-004.png': 'Orange Dial',
+    'nautiko/dial/nautiko-dl-005.png': 'Green Dial',
+    'nautiko/dial/nautiko-dl-006.png': 'Red Dial',
+    'nautiko/dial/nautiko-dl-007.png': 'Purple Dial',
+    'nautiko/dial/nautiko-dl-008.png': 'Gold Dial',
+    'nautiko/dial/nautiko-dl-009.png': 'Gunmetal Dial',
+    
+    'nautiko/hands/nautiko-hh-001.png': 'Silver Hands',
+    'nautiko/hands/nautiko-hh-002.png': 'Gold Hands',
+    'nautiko/hands/nautiko-hh-003.png': 'Black Hands',
+    'nautiko/hands/nautiko-hh-004.png': 'Red Hands',
+    
+    'nautiko/secondhands/nautiko-se-001.png': 'Silver Second Hand',
+    'nautiko/secondhands/nautiko-se-002.png': 'Gold Second Hand',
+    'nautiko/secondhands/nautiko-se-003.png': 'Red Second Hand',
+    'nautiko/secondhands/nautiko-se-004.png': 'Orange Second Hand',
+
+    // ===================== SEIKO JUST (m04) =====================
+    'seikojust/bracelet/seikojust-br-001.png': 'Black Bracelet',
+    'seikojust/bracelet/seikojust-br-002.png': 'Silver Bracelet',
+    'seikojust/bracelet/seikojust-br-003.png': 'Gold Bracelet',
+    'seikojust/bracelet/seikojust-br-004.png': 'Green Bracelet',
+    'seikojust/bracelet/seikojust-br-005.png': 'Blue Bracelet',
+    'seikojust/bracelet/seikojust-br-006.png': 'Orange Bracelet',
+    'seikojust/bracelet/seikojust-br-007.png': 'Red Bracelet',
+    'seikojust/bracelet/seikojust-br-008.png': 'Purple Bracelet',
+    'seikojust/bracelet/seikojust-br-009.png': 'Yellow Bracelet',
+    'seikojust/bracelet/seikojust-br-010.png': 'Dark Gray Bracelet',
+    'seikojust/bracelet/seikojust-br-011.png': 'Light Gray Bracelet',
+    'seikojust/bracelet/seikojust-br-012.png': 'Brown Bracelet',
+    'seikojust/bracelet/seikojust-br-013.png': 'Metal Bracelet',
+    'seikojust/bracelet/seikojust-br-014.png': 'Chrome Bracelet',
+    'seikojust/bracelet/seikojust-br-015.png': 'Rainbow Bracelet',
+    'seikojust/bracelet/seikojust-br-016.png': 'Platinum Bracelet',
+    'seikojust/bracelet/seikojust-br-017.png': 'Titanium Bracelet',
+    'seikojust/bracelet/seikojust-br-018.png': 'Steel Bracelet',
+    'seikojust/bracelet/seikojust-br-019.png': 'Nautical Bracelet',
+    'seikojust/bracelet/seikojust-br-020.png': 'Premium Bracelet',
+    'seikojust/bracelet/seikojust-br-021.png': 'Ocean Bracelet',
+    'seikojust/bracelet/seikojust-br-022.png': 'Star Bracelet',
+    'seikojust/bracelet/seikojust-br-023.png': 'Classic Bracelet',
+    
+    'seikojust/case/seikojust-cs-001.png': 'Black Case',
+    'seikojust/case/seikojust-cs-002.png': 'Silver Case',
+    'seikojust/case/seikojust-cs-003.png': 'Gold Case',
+    'seikojust/case/seikojust-cs-004.png': 'Blue Case',
+    'seikojust/case/seikojust-cs-005.png': 'Green Case',
+    'seikojust/case/seikojust-cs-006.png': 'Red Case',
+    'seikojust/case/seikojust-cs-007.png': 'Purple Case',
+    'seikojust/case/seikojust-cs-008.png': 'Orange Case',
+    'seikojust/case/seikojust-cs-009.png': 'Yellow Case',
+    'seikojust/case/seikojust-cs-010.png': 'Platinum Case',
+    'seikojust/case/seikojust-cs-011.png': 'Titanium Case',
+    
+    'seikojust/dial/seikojust-dl-001.png': 'Blue Dial',
+    'seikojust/dial/seikojust-dl-002.png': 'White Dial',
+    'seikojust/dial/seikojust-dl-003.png': 'Black Dial',
+    'seikojust/dial/seikojust-dl-004.png': 'Orange Dial',
+    'seikojust/dial/seikojust-dl-005.png': 'Green Dial',
+    'seikojust/dial/seikojust-dl-006.png': 'Red Dial',
+    'seikojust/dial/seikojust-dl-007.png': 'Purple Dial',
+    'seikojust/dial/seikojust-dl-008.png': 'Gold Dial',
+    'seikojust/dial/seikojust-dl-009.png': 'Gunmetal Dial',
+    'seikojust/dial/seikojust-dl-010.png': 'Brown Dial',
+    'seikojust/dial/seikojust-dl-011.png': 'Gray Dial',
+    'seikojust/dial/seikojust-dl-012.png': 'Aqua Dial',
+    'seikojust/dial/seikojust-dl-013.png': 'Burgundy Dial',
+    'seikojust/dial/seikojust-dl-014.png': 'Teal Dial',
+    'seikojust/dial/seikojust-dl-015.png': 'Silver Dial',
+    'seikojust/dial/seikojust-dl-016.png': 'Custom Dial',
+    'seikojust/dial/seikojust-dl-017.png': 'Sunburst Dial',
+    'seikojust/dial/seikojust-dl-018.png': 'Champagne Dial',
+    'seikojust/dial/seikojust-dl-019.png': 'Premium Dial',
+    'seikojust/dial/seikojust-dl-020.png': 'Classic Dial',
+    
+    'seikojust/date/seikojust-dt-001.png': 'Date Window',
+    'seikojust/date/seiko-just-dt-none.png': 'No Date',
+    
+    'seikojust/hands/seikojust-hh-001.png': 'Silver Hands',
+    'seikojust/hands/seikojust-hh-002.png': 'Gold Hands',
+    'seikojust/hands/seikojust-hh-003.png': 'Black Hands',
+    
+    'seikojust/second/seikojust-se-001.png': 'Silver Second Hand',
+    'seikojust/second/seikojust-se-002.png': 'Gold Second Hand',
+    'seikojust/second/seikojust-se-003.png': 'Red Second Hand',
+    'seikojust/second/seikojust-se-004.png': 'Orange Second Hand',
+    'seikojust/second/seikojust-se-005.png': 'Blue Second Hand',
+    'seikojust/second/seikojust-se-006.png': 'Green Second Hand',
+
+    // ===================== SEIKO MARINER (m05) =====================
+    'seikomariner/bracelet/seikomariner-br-001.png': 'Black Bracelet',
+    'seikomariner/bracelet/seikomariner-br-002.png': 'Silver Bracelet',
+    'seikomariner/bracelet/seikomariner-br-003.png': 'Gold Bracelet',
+    'seikomariner/bracelet/seikomariner-br-004.png': 'Green Bracelet',
+    'seikomariner/bracelet/seikomariner-br-005.png': 'Blue Bracelet',
+    'seikomariner/bracelet/seikomariner-br-006.png': 'Orange Bracelet',
+    'seikomariner/bracelet/seikomariner-br-007.png': 'Red Bracelet',
+    'seikomariner/bracelet/seikomariner-br-008.png': 'Purple Bracelet',
+    'seikomariner/bracelet/seikomariner-br-009.png': 'Yellow Bracelet',
+    'seikomariner/bracelet/seikomariner-br-010.png': 'Dark Gray Bracelet',
+    'seikomariner/bracelet/seikomariner-br-011.png': 'Light Gray Bracelet',
+    'seikomariner/bracelet/seikomariner-br-012.png': 'Brown Bracelet',
+    'seikomariner/bracelet/seikomariner-br-013.png': 'Rubber Bracelet',
+    'seikomariner/bracelet/seikomariner-br-014.png': 'NATO Bracelet',
+    'seikomariner/bracelet/seikomariner-br-015.png': 'Fabric Bracelet',
+    'seikomariner/bracelet/seikomariner-br-016.png': 'Leather Bracelet',
+    'seikomariner/bracelet/seikomariner-br-017.png': 'Vintage Bracelet',
+    'seikomariner/bracelet/seikomariner-br-018.png': 'Metal Bracelet',
+    'seikomariner/bracelet/seikomariner-br-019.png': 'Nautical Bracelet',
+    
+    'seikomariner/case/seikomariner-cs-001.png': 'Black Case',
+    'seikomariner/case/seikomariner-cs-002.png': 'Silver Case',
+    'seikomariner/case/seikomariner-cs-003.png': 'Gold Case',
+    'seikomariner/case/seikomariner-cs-004.png': 'Blue Case',
+    'seikomariner/case/seikomariner-cs-005.png': 'Green Case',
+    'seikomariner/case/seikomariner-cs-006.png': 'Red Case',
+    'seikomariner/case/seikomariner-cs-007.png': 'Purple Case',
+    'seikomariner/case/seikomariner-cs-008.png': 'Orange Case',
+    
+    'seikomariner/bezel/seikomariner-bz-001.png': 'Black Bezel',
+    'seikomariner/bezel/seikomariner-bz-002.png': 'Silver Bezel',
+    'seikomariner/bezel/seikomariner-bz-003.png': 'Gold Bezel',
+    'seikomariner/bezel/seikomariner-bz-004.png': 'Blue Bezel',
+    'seikomariner/bezel/seikomariner-bz-005.png': 'Green Bezel',
+    'seikomariner/bezel/seikomariner-bz-006.png': 'Red Bezel',
+    'seikomariner/bezel/seikomariner-bz-007.png': 'Purple Bezel',
+    'seikomariner/bezel/seikomariner-bz-008.png': 'Orange Bezel',
+    'seikomariner/bezel/seikomariner-bz-009.png': 'Yellow Bezel',
+    'seikomariner/bezel/seikomariner-bz-010.png': 'Brown Bezel',
+    'seikomariner/bezel/seikomariner-bz-011.png': 'Dark Bezel',
+    'seikomariner/bezel/seikomariner-bz-012.png': 'Ceramic Bezel',
+    'seikomariner/bezel/seikomariner-bz-013.png': 'Platinum Bezel',
+    'seikomariner/bezel/seikomariner-bz-014.png': 'Titanium Bezel',
+    'seikomariner/bezel/seikomariner-bz-015.png': 'Steel Bezel',
+    'seikomariner/bezel/seikomariner-bz-016.png': 'Dive Bezel',
+    
+    'seikomariner/dial/seikomariner-dl-001.png': 'Blue Dial',
+    'seikomariner/dial/seikomariner-dl-002.png': 'White Dial',
+    'seikomariner/dial/seikomariner-dl-003.png': 'Black Dial',
+    'seikomariner/dial/seikomariner-dl-004.png': 'Orange Dial',
+    'seikomariner/dial/seikomariner-dl-005.png': 'Green Dial',
+    'seikomariner/dial/seikomariner-dl-006.png': 'Red Dial',
+    'seikomariner/dial/seikomariner-dl-007.png': 'Purple Dial',
+    'seikomariner/dial/seikomariner-dl-008.png': 'Gold Dial',
+    'seikomariner/dial/seikomariner-dl-009.png': 'Gunmetal Dial',
+    'seikomariner/dial/seikomariner-dl-010.png': 'Brown Dial',
+    'seikomariner/dial/seikomariner-dl-011.png': 'Gray Dial',
+    'seikomariner/dial/seikomariner-dl-012.png': 'Aqua Dial',
+    'seikomariner/dial/seikomariner-dl-013.png': 'Burgundy Dial',
+    'seikomariner/dial/seikomariner-dl-014.png': 'Teal Dial',
+    'seikomariner/dial/seikomariner-dl-015.png': 'Silver Dial',
+    'seikomariner/dial/seikomariner-dl-016.png': 'Custom Dial',
+    'seikomariner/dial/seikomariner-dl-017.png': 'Sunburst Dial',
+    
+    'seikomariner/date/seikomariner-dt-001.png': 'Date Window',
+    'seikomariner/date/seikomariner-dt-none.png': 'No Date',
+    
+    'seikomariner/gmthand/seikomariner-gm-001.png': 'GMT Hand Red',
+    'seikomariner/gmthand/seikomariner-gm-002.png': 'GMT Hand Blue',
+    'seikomariner/gmthand/seikomariner-gm-003.png': 'GMT Hand Black',
+    'seikomariner/gmthand/seikomariner-gm-004.png': 'GMT Hand Gold',
+    'seikomariner/gmthand/seikomariner-gm-005.png': 'GMT Hand Silver',
+    'seikomariner/gmthand/seikomariner-gm-006.png': 'GMT Hand Orange',
+    'seikomariner/gmthand/seikomariner-gm-007.png': 'GMT Hand Green',
+    'seikomariner/gmthand/seikomariner-gm-008.png': 'GMT Hand Purple',
+    'seikomariner/gmthand/seikomariner-gm-none.png': 'No GMT Hand',
+    
+    'seikomariner/hands/seikomariner-hh-001.png': 'Silver Hands',
+    'seikomariner/hands/seikomariner-hh-002.png': 'Gold Hands',
+    'seikomariner/hands/seikomariner-hh-003.png': 'Black Hands',
+    'seikomariner/hands/seikomariner-hh-004.png': 'Red Hands',
+    'seikomariner/hands/seikomariner-hh-005.png': 'Blue Hands',
+    'seikomariner/hands/seikomariner-hh-006.png': 'Green Hands',
+    'seikomariner/hands/seikomariner-hh-007.png': 'Orange Hands',
+    'seikomariner/hands/seikomariner-hh-008.png': 'Purple Hands',
+    'seikomariner/hands/seikomariner-hh-009.png': 'Yellow Hands',
+    'seikomariner/hands/seikomariner-hh-010.png': 'Lume Hands',
+    'seikomariner/hands/seikomariner-hh-011.png': 'Premium Hands',
+    
+    'seikomariner/second/seikomariner-se-001.png': 'Silver Second Hand',
+    'seikomariner/second/seikomariner-se-002.png': 'Gold Second Hand',
+    'seikomariner/second/seikomariner-se-003.png': 'Red Second Hand',
+    'seikomariner/second/seikomariner-se-004.png': 'Blue Second Hand',
+    'seikomariner/second/seikomariner-se-005.png': 'Green Second Hand',
+    'seikomariner/second/seikomariner-se-006.png': 'Orange Second Hand',
+    'seikomariner/second/seikomariner-se-007.png': 'Purple Second Hand',
+    'seikomariner/second/seikomariner-se-008.png': 'Yellow Second Hand',
+    'seikomariner/second/seikomariner-se-009.png': 'Lume Second Hand',
+
+    // ===================== SEIKO NAUT (m06) =====================
+    'seikonaut/bracelet/seikonaut-br-001.png': 'Black Bracelet',
+    'seikonaut/bracelet/seikonaut-br-002.png': 'Silver Bracelet',
+    'seikonaut/bracelet/seikonaut-br-003.png': 'Gold Bracelet',
+    'seikonaut/bracelet/seikonaut-br-004.png': 'Green Bracelet',
+    'seikonaut/bracelet/seikonaut-br-005.png': 'Blue Bracelet',
+    'seikonaut/bracelet/seikonaut-br-006.png': 'Orange Bracelet',
+    'seikonaut/bracelet/seikonaut-br-007.png': 'Red Bracelet',
+    'seikonaut/bracelet/seikonaut-br-008.png': 'Purple Bracelet',
+    
+    'seikonaut/case/seikonaut-cs-001.png': 'Black Case',
+    'seikonaut/case/seikonaut-cs-002.png': 'Silver Case',
+    'seikonaut/case/seikonaut-cs-003.png': 'Gold Case',
+    
+    'seikonaut/dial/seikonaut-dl-001.png': 'Blue Dial',
+    'seikonaut/dial/seikonaut-dl-002.png': 'White Dial',
+    'seikonaut/dial/seikonaut-dl-003.png': 'Black Dial',
+    'seikonaut/dial/seikonaut-dl-004.png': 'Orange Dial',
+    'seikonaut/dial/seikonaut-dl-005.png': 'Green Dial',
+    'seikonaut/dial/seikonaut-dl-006.png': 'Red Dial',
+    'seikonaut/dial/seikonaut-dl-007.png': 'Purple Dial',
+    'seikonaut/dial/seikonaut-dl-008.png': 'Gold Dial',
+    'seikonaut/dial/seikonaut-dl-009.png': 'Gunmetal Dial',
+    
+    'seikonaut/hands/seikonaut-hh-001.png': 'Silver Hands',
+    'seikonaut/hands/seikonaut-hh-002.png': 'Gold Hands',
+    'seikonaut/hands/seikonaut-hh-003.png': 'Black Hands',
+    
+    'seikonaut/second/seikonaut-se-001.png': 'Silver Second Hand',
+    'seikonaut/second/seikonaut-se-002.png': 'Gold Second Hand',
+    'seikonaut/second/seikonaut-se-003.png': 'Red Second Hand',
+    'seikonaut/second/seikonaut-se-004.png': 'Orange Second Hand',
+
+    // ===================== SEITONA (m07) =====================
+    'seitona/bracelet/seitona-br-001.png': 'Black Bracelet',
+    'seitona/bracelet/seitona-br-002.png': 'Silver Bracelet',
+    'seitona/bracelet/seitona-br-003.png': 'Gold Bracelet',
+    'seitona/bracelet/seitona-br-004.png': 'Green Bracelet',
+    'seitona/bracelet/seitona-br-005.png': 'Blue Bracelet',
+    'seitona/bracelet/seitona-br-006.png': 'Orange Bracelet',
+    'seitona/bracelet/seitona-br-007.png': 'Red Bracelet',
+    'seitona/bracelet/seitona-br-008.png': 'Purple Bracelet',
+    
+    'seitona/case/seitona-cs-001.png': 'Black Case',
+    'seitona/case/seitona-cs-002.png': 'Silver Case',
+    'seitona/case/seitona-cs-003.png': 'Gold Case',
+    'seitona/case/seitona-cs-004.png': 'Blue Case',
+    'seitona/case/seitona-cs-005.png': 'Green Case',
+    'seitona/case/seitona-cs-006.png': 'Red Case',
+    
+    'seitona/bezel/seitona-bz-001.png': 'Black Bezel',
+    'seitona/bezel/seitona-bz-002.png': 'Silver Bezel',
+    'seitona/bezel/seitona-bz-003.png': 'Gold Bezel',
+    'seitona/bezel/seitona-bz-004.png': 'Blue Bezel',
+    'seitona/bezel/seitona-bz-005.png': 'Green Bezel',
+    'seitona/bezel/seitona-bz-006.png': 'Red Bezel',
+    'seitona/bezel/seitona-bz-007.png': 'Purple Bezel',
+    'seitona/bezel/seitona-bz-008.png': 'Orange Bezel',
+    
+    'seitona/dial/seitona-dl-001.png': 'Blue Dial',
+    'seitona/dial/seitona-dl-002.png': 'White Dial',
+    'seitona/dial/seitona-dl-003.png': 'Black Dial',
+    'seitona/dial/seitona-dl-004.png': 'Orange Dial',
+    'seitona/dial/seitona-dl-005.png': 'Green Dial',
+    'seitona/dial/seitona-dl-006.png': 'Red Dial',
+    'seitona/dial/seitona-dl-007.png': 'Purple Dial',
+    'seitona/dial/seitona-dl-008.png': 'Gold Dial',
+    'seitona/dial/seitona-dl-009.png': 'Gunmetal Dial',
+    'seitona/dial/seitona-dl-010.png': 'Brown Dial',
+    'seitona/dial/seitona-dl-011.png': 'Silver Dial',
+    
+    'seitona/hands/seitona-hh-001.png': 'Silver Hands',
+    'seitona/hands/seitona-hh-002.png': 'Gold Hands',
+    
+    'seitona/second/seitona-se-001.png': 'Silver Second Hand',
+    'seitona/second/seitona-se-002.png': 'Gold Second Hand',
+    
+    'seitona/subdialhand/seitona-sd-001.png': 'Silver Subdial Hand',
+    'seitona/subdialhand/seitona-sd-002.png': 'Gold Subdial Hand',
+  };
+
+  function getCustomTooltipName(filePath) {
+    if (!filePath) return null;
+    if (tooltipConfig[filePath]) return tooltipConfig[filePath];
+    const rel = String(filePath).replace(/^assets\//i, '').replace(/^\//, '');
+    if (tooltipConfig[rel]) return tooltipConfig[rel];
+    const filename = String(filePath).split('/').pop();
+    for (const key in tooltipConfig) {
+      if (key.endsWith(filename)) return tooltipConfig[key];
+    }
+    return null;
+  }
+
+  function findMatchingChronodialForCase(caseFile, groupMap, chronodialGroupNames) {
+    if (!caseFile || !groupMap) return null;
+    const filename = String(caseFile).split('/').pop().toLowerCase();
+    const tokens = filename.replace(/\.[^/.]+$/, '').split(/[-_\. ]+/).filter(Boolean);
+    for (const gname of chronodialGroupNames) {
+      const gm = groupMap[gname];
+      if (!gm || !gm.options) continue;
+      for (const t of tokens) {
+        const found = gm.options.find(o => (String(o.file || '').toLowerCase().indexOf(t) !== -1)
+          || (String(o.id || '').toLowerCase().indexOf(t) !== -1)
+          || (String(o.name || '').toLowerCase().indexOf(t) !== -1));
+        if (found) return { group: gname, option: found };
+      }
+    }
+    for (const gname of chronodialGroupNames) {
+      const gm = groupMap[gname];
+      if (gm && gm.options && gm.options[0]) return { group: gname, option: gm.options[0] };
+    }
+    return null;
+  }
+
+  function findVariantId(container) {
+    if (container && container.dataset && container.dataset.variantId) return container.dataset.variantId;
+    let form = container ? container.closest('form[action^="/cart"]') : null;
+    if (!form) form = document.querySelector('form[action^="/cart"]');
+    if (form) {
+      const input = form.querySelector('input[name="id"]');
+      if (input && input.value) return input.value;
+    }
+    return null;
+  }
+
+  function buildUI(manifest, container) {
+    if (!manifest || !container) return;
+
+    const containerId = 'cfg-' + Math.random().toString(36).slice(2, 9);
+    try { container.dataset.configuratorId = containerId; } catch (e) {}
+
+    const containerWatchCenter = parseFloat(container.dataset.watchCenter || WATCH_CENTER_LEFT_PCT);
+    const containerWatchScale = parseFloat(container.dataset.watchScale || WATCH_SCALE);
+
+    const requestedModelKey = String(container.dataset.model || Object.keys(manifest || {})[0] || "").trim();
+    let modelKey = requestedModelKey;
+    let model = manifest[modelKey];
+    if (!model) {
+      const resolved = resolveModelByKey(manifest, requestedModelKey);
+      if (resolved) { modelKey = resolved.key; model = resolved.model; try { container.dataset.model = modelKey; } catch (e) {} }
+    }
+    if (!model) { container.innerHTML = '<div style="padding:20px;color:#900">Model not found: ' + requestedModelKey + '</div>'; return; }
+
+    const viewKey = container.dataset.view || Object.keys(model.views || {})[0];
+    const view = (model.views || {})[viewKey];
+    if (!view || !Array.isArray(view.layers)) { container.innerHTML = '<div style="padding:20px;color:#900">View not configured for ' + modelKey + '</div>'; return; }
+
+    const layers = view.layers.slice();
+    try { window.__configurator_layers_for_debug = layers; } catch (e) {}
+
+    const groups = [];
+    const groupMap = {};
+    layers.forEach((layerEntry) => {
+      const g = layerEntry.group || layerEntry.id || "misc";
+      if (!groupMap[g]) { groupMap[g] = { group: g, options: [] }; groups.push(groupMap[g]); }
+      groupMap[g].options.push(layerEntry);
+    });
+
+    if (groupMap["chronocase"]) {
+      groupMap["case"] = groupMap["case"] || { group: "case", options: [] };
+      groupMap["chronocase"].options.forEach((opt) => { opt.__isChronoCase = true; opt.group = "case"; groupMap["case"].options.push(opt); });
+      const idx = groups.findIndex((g) => g.group === "chronocase");
+      if (idx !== -1) groups.splice(idx, 1);
+      delete groupMap["chronocase"];
+    }
+
+    const chronoGroupNames = Object.keys(groupMap).filter((k) => {
+      if (String(k).toLowerCase() === "case") return false;
+      return /\bchron|chrono|chronohand|chronodial|chronodials\b/i.test(k)
+        || (groupMap[k].options || []).some((o) => {
+          const s = String((o.file || "") + " " + (o.id || "") + " " + (o.name || "")).toLowerCase();
+          return /\bchron|chrono|chronohand|chronodial|chronodials\b/i.test(s);
+        });
+    });
+
+    const chronodialGroupNames = Object.keys(groupMap).filter(k => /\bdial|chronodial|chronodials\b/i.test(k));
+
+    let sidebar = container.querySelector(".configurator-sidebar");
+    let viewer = container.querySelector(".configurator-viewer");
+    let meta = container.querySelector(".configurator-meta");
+    if (!sidebar) { sidebar = document.createElement("div"); sidebar.className = "configurator-sidebar"; container.appendChild(sidebar); }
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.className = "configurator-meta";
+      if (viewer && viewer.parentNode === container) container.insertBefore(meta, viewer);
+      else container.appendChild(meta);
+    }
+    if (!viewer) { viewer = document.createElement("div"); viewer.className = "configurator-viewer"; container.appendChild(viewer); }
+    try { const st = window.getComputedStyle(viewer); if (st.position === "static") viewer.style.position = "relative"; viewer.style.overflow = "hidden"; } catch (e) {}
+
+   (function ensureSidebarTitle() {
+  try {
+    const titleMap = {
+      'm01': 'SeikOak - Custom',
+      'm02': 'Santeiko - Custom',
+      'm03': 'Nautiko - Custom',
+      'm04': 'Seikojust - Custom',
+      'm05': 'Seikomariner - Custom',
+      'm06': 'Seikonaut - Custom',
+      'm07': 'Seikotona - Custom'
+    };
+    
+    // FORCE the title
+    let titleEl = sidebar.querySelector(".configurator-title");
+    if (!titleEl) {
+      titleEl = document.createElement("div");
+      titleEl.className = "configurator-title";
+      sidebar.insertBefore(titleEl, sidebar.firstChild);
+    }
+    
+    const title = titleMap[modelKey] || "Seiko Oak - Custom";
+    titleEl.textContent = title;
+    console.log("✅ Title set to:", title); // Debug log
+  } catch(e) {
+    console.warn("ensureSidebarTitle failed", e);
+  }
+})();
+
+    (function ensureMeta() {
+      try {
+        /* PRICE TAG REMOVED
+        let priceEl = meta.querySelector(".configurator-price");
+        const priceText =
+          (container.dataset && container.dataset.productPrice)
+          || (document.querySelector(".price") && document.querySelector(".price").textContent.trim())
+          || (document.querySelector("[data-product-price]") && document.querySelector("[data-product-price]").textContent.trim())
+          || "";
+        if (!priceEl) {
+          priceEl = document.createElement("div");
+          priceEl.className = "configurator-price";
+          meta.appendChild(priceEl);
+        }
+        priceEl.textContent = priceText;
+  */
+        document.querySelectorAll('.configurator-add-button').forEach((b, idx) => {
+          if (idx === 0 && meta.contains(b)) return;
+          b.remove();
+        });
+
+    let addBtn = meta.querySelector(".configurator-add-button");
+if (!addBtn) {
+  addBtn = document.createElement("button");
+  addBtn.className = "configurator-add-button";
+  addBtn.type = "button";
+  addBtn.textContent = "Add Your Custom Watch To Cart";
+meta.appendChild(addBtn);
+} else {
+          addBtn.replaceWith(addBtn.cloneNode(true));
+        }
+        addBtn = meta.querySelector(".configurator-add-button");
+
+        addBtn.addEventListener("click", function () {
+          const variantId = findVariantId(container);
+          if (!variantId) {
+            alert("Variant ID not provided — configurator must be placed on a product page or container.dataset.variantId must be set.");
+            return;
+          }
+          const props = {};
+          Object.keys(selection).forEach(k => {
+            if (!selection[k]) return;
+            const sel = selection[k];
+            const key = String(k).replace(/[^a-z0-9\-_]+/gi,' ').replace(/\b\w/g, ch => ch.toUpperCase());
+            props[key] = friendlyNameFromOption((groupMap[k] && groupMap[k].options) ? (groupMap[k].options.find(o=>o.file === sel) || {file:sel}) : {file:sel});
+          });
+          try { addBtn.disabled = true; } catch(e){}
+          fetch('/cart/add.js', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: variantId, quantity: 1, properties: props })
+          }).then(r => {
+            if(!r.ok) throw new Error('Add to cart failed: ' + r.status);
+            return r.json();
+          }).then(()=> {
+            window.location.href = '/cart';
+          }).catch(err => {
+            console.error('Add to cart failed', err);
+            alert('This item is sold out!');
+            try { addBtn.disabled = false; } catch(e){}
+          });
+        });
+      } catch(e){
+        console.warn('ensureMeta failed', e);
+      }
+    })();
+
+    function removeGroupImagesExcept(groupName, keepAbs) {
+  try {
+    const selector = `img.layer[data-configurator-id="${containerId}"]`;
+    const imgs = Array.from(document.querySelectorAll(selector));
+    
+    imgs.forEach((img, idx) => {
+      const src = img.dataset && img.dataset.src ? img.dataset.src : img.src;
+      const layerMatch = layers.find((le) => makeAbsUrl(le.file) === src);
+      let imgGroup = null;
+      if (layerMatch) imgGroup = layerMatch.group || layerEntry.id || "misc";
+      
+      const isMatch = (imgGroup === groupName) || (/case/i.test(groupName) && /\/case\//i.test(src));
+      
+      if (isMatch && (!keepAbs || src !== keepAbs)) {
+        console.log(`✅ FADING OUT image ${idx}`);
+        
+        // Force crossfade with inline styles
+       img.style.transition = `opacity 150ms ease`;
+        requestAnimationFrame(() => {
+          img.style.opacity = "0";
+        });
+        
+        // Remove after fade completes
+        setTimeout(() => { 
+          try { img.remove(); } 
+          catch (e) {} 
+        }, 310);
+      }
+    });
+  } catch (e) { 
+    console.warn("removeGroupImagesExcept failed", e); 
+  }
+}
+
+    const selection = {};
+    Object.keys(groupMap).forEach((k) => {
+      if (chronoGroupNames.indexOf(k) !== -1) return;
+      selection[k] = (groupMap[k].options[0] && groupMap[k].options[0].file) || null;
+    });
+
+    let renderRevision = 0;
+    function bumpRevision() { renderRevision++; }
+
+    sidebar.querySelectorAll(".configurator-group").forEach(n => n.remove());
+    const groupWrappers = {};
+    const orderedGroups = Object.keys(groupMap).map((k) => groupMap[k]);
+
+    orderedGroups.forEach((group) => {
+      const groupWrap = document.createElement("div");
+      groupWrap.className = "configurator-group";
+      groupWrap.dataset.group = group.group;
+
+      const h = document.createElement("h4");
+      const titleText = capitalizeWords(group.group);
+      h.innerHTML = '<span class="group-title">' + titleText + '</span><span class="selected-label"></span>';
+      groupWrap.appendChild(h);
+
+      const thumbs = document.createElement("div");
+      thumbs.className = "configurator-thumbs";
+
+      group.options.forEach((opt, idx) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "configurator-thumb";
+        btn.title = opt.name || "";  // ← CHANGED! Remove opt.file from here
+        btn.dataset.file = opt.file || "";
+        btn.dataset.name = opt.name || "";
+
+        const img = document.createElement("img");
+        img.alt = opt.name || opt.file || "";
+        const eager = idx < THUMB_EAGER_COUNT;
+        attachThumbToButton(img, modelKey, opt, eager);
+        btn.appendChild(img);
+
+       let tooltipTimer = null;
+btn.addEventListener("mouseenter", () => {
+  const customName = getCustomTooltipName(opt.file);
+  const nm = customName || btn.dataset.name || opt.name || "";
+  if (!nm) return;
+  tooltipTimer = setTimeout(() => {
+    const rect = btn.getBoundingClientRect();
+    tooltip.show(nm, rect);
+  }, 80);
+});
+        btn.addEventListener("mouseleave", () => { clearTimeout(tooltipTimer); tooltip.hide(); });
+
+  btn.addEventListener("click", () => {
+  try {
+    try { btn.disabled = true; btn.style.pointerEvents = "none"; } catch (e) {}
+    try { preloadImage(makeAbsUrl(opt.file)).catch(()=>{}); } catch(e){}
+    
+    if (selection[group.group] !== opt.file) {
+      removeGroupImagesExcept(group.group, makeAbsUrl(opt.file));
+      // DELAY: Wait for fade to complete before updating selection and rendering
+      setTimeout(() => {
+        selection[group.group] = opt.file;
+        bumpRevision();
+     if (/case/i.test(group.group)) {
+  updateChronoVisibility();
+  debouncedRender();
+} else { 
+  debouncedRender(); 
+  
+}
+  // ===== DATE VISIBILITY =====
+        if (/date/i.test(group.group)) {
+          const dateImg = document.querySelector('img[alt*="dt-001"], img[data-group*="date"][alt*="001"]');
+          if (dateImg) {
+            if (opt.file.includes('none') || opt.file.includes('dt-none')) {
+              dateImg.style.display = 'none';
+              console.log('✅ Date hidden');
+            } else {
+              dateImg.style.display = 'block';
+              console.log('✅ Date shown');
+            }
+          }
+        }
+        // ===== GMT HAND VISIBILITY =====
+        if (/gmthand/i.test(group.group)) {
+          const gmtImg = document.querySelector('img[alt*="gm-"], img[data-group*="gmthand"]');
+          if (gmtImg) {
+            if (opt.file.includes('none') || opt.file.includes('gm-none')) {
+              gmtImg.style.display = 'none';
+              console.log('✅ GMT hand hidden');
+            } else {
+              gmtImg.style.display = 'block';
+              console.log('✅ GMT hand shown');
+            }
+          }
+        }
+        
+        // ===== NEW: HANDLE DATE LAYER VISIBILITY =====
+        if (/date/i.test(group.group)) {
+          const dateImg = document.querySelector('img[alt*="dt-001"], img[data-group*="date"][alt*="001"]');
+          if (dateImg) {
+            if (opt.file.includes('none') || opt.file.includes('dt-none')) {
+              // Hide the date image
+              dateImg.style.display = 'none';
+              console.log('✅ Date image hidden');
+            } else {
+              // Show the date image
+              dateImg.style.display = 'block';
+              console.log('✅ Date image shown');
+            }
+          }
+        }
+        // ===== END DATE LAYER VISIBILITY =====
+        
+      }, LAYER_FADE_MS + 50);
+    } else {
+      selection[group.group] = opt.file;
+    }
+
+    Array.from(thumbs.children).forEach((ch) => ch.classList.remove("selected"));
+    btn.classList.add("selected");
+
+    const lbl = h.querySelector(".selected-label");
+    if (lbl) lbl.textContent = friendlyNameFromOption(opt);
+    lbl.style.fontWeight = "bold";
+
+    try {
+      const addBtn = meta.querySelector(".configurator-add-button");
+      if (addBtn) addBtn.disabled = false;
+    } catch(e){}
+  } catch (err) {
+    console.error("Thumb click failed", err);
+  } finally {
+    setTimeout(() => { try { btn.disabled = false; btn.style.pointerEvents = "auto"; } catch (e) {} }, 250);
+  }
+});
+
+        thumbs.appendChild(btn);
+      });
+
+      groupWrap.appendChild(thumbs);
+      sidebar.appendChild(groupWrap);
+      groupWrappers[group.group] = groupWrap;
+
+      if (chronoGroupNames.indexOf(group.group) !== -1) groupWrap.style.display = "none";
+
+      const lbl = groupWrap.querySelector(".selected-label");
+      if (selection[group.group]) {
+        const selFile = selection[group.group];
+        const found = (group.options || []).find((o) => o.file === selFile) || {};
+        if (lbl) lbl.textContent = friendlyNameFromOption(found);
+        const thumbsChildren = groupWrap.querySelectorAll(".configurator-thumb");
+        Array.from(thumbsChildren).forEach((tn) => { if (tn.dataset && tn.dataset.file === selFile) tn.classList.add("selected"); });
+      } else { if (lbl) lbl.textContent = ""; }
+    });
+
+    try {
+      const old = Array.from(document.querySelectorAll(`img.layer[data-configurator-id="${containerId}"]`));
+      old.forEach(n => n.remove());
+    } catch (e) {}
+
+    const debouncedRender = debounce(renderViewer, RENDER_DEBOUNCE_MS);
+
+    (function prewarmInitial(){
+      const toPreload = new Set();
+      Object.keys(selection).forEach((g) => { if(selection[g]) toPreload.add(makeAbsUrl(selection[g])); });
+      orderedGroups.forEach((g) => {
+        if (chronoGroupNames.indexOf(g.group) !== -1) return;
+        const first = g.options[0] && makeAbsUrl(g.options[0].file);
+        if (first) toPreload.add(first);
+      });
+      Array.from(toPreload).slice(0, PRELOAD_CONCURRENCY*2).forEach(src => { preloadImage(src).catch(()=>{}); });
+    })();
+
+    const caseGroupName = Object.keys(groupMap).find((k) => /case/i.test(k)) || null;
+    const nonChronoGroups = ["dial"];
+    const prevNonChronoSelection = {};
+
+    function updateChronoVisibility(){
+      if(!chronoGroupNames || !chronoGroupNames.length) return;
+      const caseSelectedFile = caseGroupName ? selection[caseGroupName] : null;
+      let enabled = isChronoCaseByFile(caseSelectedFile);
+
+      if (modelKey === 'seikojust' || modelKey === 'seikomariner') {
+        enabled = true;
+      }
+
+      nonChronoGroups.forEach((ng) => {
+        const ngWrap = groupWrappers[ng];
+        if(!ngWrap) return;
+        if(enabled){
+          if(selection[ng]) { prevNonChronoSelection[ng] = selection[ng]; delete selection[ng]; }
+          ngWrap.style.display = "none";
+          try {
+            layers.forEach((layerEntry) => {
+              const g = layerEntry.group || layerEntry.id || "misc";
+              if(g === ng){
+                const abs = makeAbsUrl(layerEntry.file);
+                const sel = `img.layer[data-configurator-id="${containerId}"]`;
+                const imgs = Array.from(document.querySelectorAll(sel));
+                imgs.forEach((img) => { 
+                    if(img.dataset && img.dataset.src === abs) {
+                        img.classList.remove("visible");
+                        setTimeout(() => { try { img.remove(); } catch (e) {} }, LAYER_FADE_MS + 50);
+                    }
+                });
+              }
+            });
+          } catch(e){}
+        } else {
+          ngWrap.style.display = "";
+          if(!selection[ng]){
+            if(prevNonChronoSelection[ng]) { selection[ng] = prevNonChronoSelection[ng]; delete prevNonChronoSelection[ng]; }
+            else if(groupMap[ng] && groupMap[ng].options && groupMap[ng].options[0]) selection[ng] = groupMap[ng].options[0].file;
+            try {
+              const lbl = ngWrap.querySelector(".selected-label");
+              if(lbl && selection[ng]){
+                const found = (groupMap[ng] && groupMap[ng].options) ? groupMap[ng].options.find(o=>o.file === selection[ng]) : {};
+                lbl.textContent = friendlyNameFromOption(found);
+              }
+              const thumbs = ngWrap.querySelector(".configurator-thumbs");
+              if (thumbs) {
+                Array.from(thumbs.children).forEach((ch) => ch.classList.remove("selected"));
+                const idx = (groupMap[ng] && groupMap[ng].options) ? groupMap[ng].options.findIndex(o=>o.file === selection[ng]) : -1;
+                if(idx>=0 && thumbs.children[idx]) thumbs.children[idx].classList.add("selected");
+                else if(thumbs.children[0]) thumbs.children[0].classList.add("selected");
+              }
+            } catch(e){}
+          }
+        }
+      });
+
+      chronoGroupNames.forEach((gname) => {
+        const wrap = groupWrappers[gname];
+        if(!wrap) return;
+        if(enabled){
+          wrap.style.display = "";
+          if(!selection[gname]){
+            const firstOpt = groupMap[gname] && groupMap[gname].options && groupMap[gname].options[0];
+            if(firstOpt && firstOpt.file){
+              let toSelect = firstOpt;
+              try {
+                if (caseSelectedFile && chronodialGroupNames.length) {
+                  const match = findMatchingChronodialForCase(caseSelectedFile, groupMap, chronodialGroupNames);
+                  if (match && match.group === gname && match.option) toSelect = match.option;
+                }
+              } catch (e) { console.warn("chronodial matching failed", e); }
+
+              try {
+                selection[gname] = toSelect.file;
+                const thumbs = wrap.querySelector(".configurator-thumbs");
+                if(thumbs){
+                  Array.from(thumbs.children).forEach((ch)=>ch.classList.remove("selected"));
+                  const idx = (groupMap[gname] && groupMap[gname].options) ? groupMap[gname].options.findIndex(o=>o.file === selection[gname]) : -1;
+                  if(idx>=0 && thumbs.children[idx]) thumbs.children[idx].classList.add("selected");
+                  else if(thumbs.children[0]) thumbs.children[0].classList.add("selected");
+                }
+                const lbl = wrap.querySelector(".selected-label");
+                if(lbl) lbl.textContent = friendlyNameFromOption(toSelect);
+
+                try { preloadImage(makeAbsUrl(toSelect.file)).catch(()=>{}); } catch(e){}
+
+                bumpRevision(); debouncedRender();
+              } catch (err) {
+                console.error("Chronodial auto-selection error", err);
+              }
+            }
+          }
+        } else {
+          wrap.style.display = "none";
+          if(selection[gname]) delete selection[gname];
+          try {
+            layers.forEach((layerEntry) => {
+              const g = layerEntry.group || layerEntry.id || "misc";
+              if(g === gname){
+                const abs = makeAbsUrl(layerEntry.file);
+                const sel = `img.layer[data-configurator-id="${containerId}"]`;
+                const imgs = Array.from(document.querySelectorAll(sel));
+                imgs.forEach((img)=>{ 
+                    if(img.dataset && img.dataset.src === abs) {
+                        img.classList.remove("visible");
+                        setTimeout(() => { try { img.remove(); } catch(e){} }, LAYER_FADE_MS + 50);
+                    }
+                });
+              }
+            });
+            const fallbackImgs = Array.from(document.querySelectorAll(`img.layer[data-configurator-id="${containerId}"]`));
+            fallbackImgs.forEach((img)=>{ 
+                if(img.src && /chron|chrono|chronohand|chronodial/i.test(img.src)) {
+                    img.classList.remove("visible");
+                    setTimeout(() => { try{ img.remove(); }catch(e){} }, LAYER_FADE_MS + 50);
+                }
+            });
+          } catch(e) { console.warn("Chronohand cleanup failed", e); }
+        }
+      });
+
+      Object.keys(groupWrappers).forEach(gname => {
+        const wrap = groupWrappers[gname];
+        if(!wrap) return;
+        const lbl = wrap.querySelector(".selected-label");
+        if(!lbl) return;
+        const s = selection[gname];
+        if(!s){ lbl.textContent = ""; return; }
+        const gm = groupMap[gname];
+        const found = (gm && gm.options) ? gm.options.find(o => o.file === s) : null;
+        lbl.textContent = friendlyNameFromOption(found || { file: s });
+      });
+
+      bumpRevision();
+      debouncedRender();
+    }
+
+    function isChronoCaseByFile(file) {
+      if (!file) return false;
+      const name = String(file).toLowerCase();
+      if (/\bchron|chrono|chronocase\b/.test(name)) return true;
+      for (let i = 0; i < layers.length; i++) {
+        const l = layers[i];
+        if (!l) continue;
+        if (String(l.file || "").toLowerCase() === name || String(l.file || "").toLowerCase().endsWith("/" + name)) {
+          if (l.__isChronoCase) return true;
+        }
+        if (String(l.id || "").toLowerCase() === name) {
+          if (l.__isChronoCase) return true;
+        }
+      }
+      return false;
+    }
+
+    function renderViewer() {
+      const thisRev = renderRevision;
+      try {
+        if (!viewer.style.position) viewer.style.position = "relative";
+
+        layers.forEach((layerEntry, layerIndex) => {
+          const group = layerEntry.group || layerEntry.id || "misc";
+          const selectedFile = selection[group];
+          if (!selectedFile) return;
+          if (selectedFile !== layerEntry.file) return;
+          const abs = makeAbsUrl(layerEntry.file);
+
+          const selAll = `img.layer[data-configurator-id="${containerId}"]`;
+          const existing = Array.from(document.querySelectorAll(selAll)).find((i) => i.dataset && i.dataset.src === abs);
+          if (existing) { 
+            if (!existing.classList.contains("visible")) {
+                requestAnimationFrame(() => {
+                    existing.classList.add("visible");
+                });
+            }
+            return; 
+          }
+
+          appendImgForLayer(abs, layerEntry, layerIndex);
+        });
+
+        const allImgs = Array.from(document.querySelectorAll(`img.layer[data-configurator-id="${containerId}"]`));
+        if (allImgs.length > 120) {
+          allImgs.forEach((img) => {
+            if (!img.classList.contains("visible")) try { img.remove(); } catch (e) {}
+          });
+        }
+      } catch (err) {
+        console.error("renderViewer error (non-fatal) — continuing", err);
+        try {
+          if (!window.__configurator_last_error_shown) {
+            window.__configurator_last_error_shown = true;
+            console.warn("Configurator encountered a render error; check console for details.");
+            setTimeout(() => { window.__configurator_last_error_shown = false; }, 5000);
+          }
+        } catch (e) {}
+      }
+    }
+
+    function appendImgForLayer(srcUrl, layerEntry, layerIndex) {
+      const dateConfigs = {
+  'seikojust-dt-001.png': { scale: 0.20, offsetX: 80, offsetY: -14, rotation: 0 },
+  'seiko-just-dt-none.png': { scale: 0.6, offsetX: 46, offsetY: -14, rotation: 0 },
+  'seikomariner-dt-001.png': { scale: 0.15, offsetX: 46, offsetY: 11, rotation: 0 },
+  'seikomariner-dt-none.png': { scale: 0.5, offsetX: 46, offsetY: 11, rotation: 0 }
+};
+      const group = layerEntry.group || layerEntry.id || "misc";
+      const abs = srcUrl;
+      const watchScale = containerWatchScale;
+      const img = document.createElement("img");
+      img.className = "layer";
+      img.dataset.src = abs;
+      img.dataset.group = group;
+      img.dataset.configuratorId = containerId;
+      img.alt = layerEntry.id || layerEntry.group || "";
+      img.decoding = "async";
+      img.loading = "eager";
+      img.crossOrigin = "anonymous";
+      img.style.visibility = "hidden";
+      img.style.position = "absolute";
+let zIndex = 10 + (layerIndex || 0);
+
+// Chrono layers need special handling
+if (/chronodial|chrono[-_]?dial/i.test(group)) {
+  zIndex = 50;  // Chrono dial BELOW chrono hands!
+} else if (/chronohand|chrono[-_]?hand|chronohands/i.test(group)) {
+  zIndex = 80;  // ← CHANGE FROM 100 to 80 (between dial 50 and subdial 70)
+} else if (/\/second\//i.test(srcUrl)) {
+  zIndex = 102; // ALL SECOND HANDS ON TOP!
+} else if (/subdialhand/i.test(group)) {
+  zIndex = 70;  // ⭐ SUBDIALS BELOW EVERYTHING!
+} else if (/hand/i.test(group)) {
+  zIndex = 80;  // ← CHANGE FROM 100 to 80
+} else if (/\bdt\b/i.test(group)) {
+  zIndex = 45;  // Date window visible but behind hands
+} else if (/dial/i.test(group)) {
+  zIndex = 50;  // Regular dial in middle
+} else if (/case/i.test(group)) {
+  zIndex = 20;  // Case at bottom
+}
+
+img.style.zIndex = String(zIndex);      img.style.transformOrigin = "50% 50%";
+      try {
+  const filename = String(layerEntry.file || "").split("/").pop().toLowerCase();
+  
+   // PERMANENT HAND CONFIGS
+    const handConfigs = {
+      // Eliminate
+    
+      'seitona-sd-001.png': { scale: 0.65, offsetX: -2, offsetY: 0, rotation: 0 },
+      'seitona-sd-002.png': { scale: 0.33, offsetX: 0, offsetY: 0, rotation: -1 }
+    };
+    // ===== DATE POSITION CONFIGS =====
+const dateConfigs = {
+  'seikojust-dt-001.png': { scale: 0.6, offsetX: 80, offsetY: -14, rotation: 0 },
+  'seiko-just-dt-none.png': { scale: 0.6, offsetX: 46, offsetY: -14, rotation: 0 },
+  'seikomariner-dt-001.png': { scale: 0.20, offsetX: 46, offsetY: 11, rotation: 0 },
+  'seikomariner-dt-none.png': { scale: 0.5, offsetX: 46, offsetY: 11, rotation: 0 }
+};
+// ===== END DATE CONFIGS =====
+    
+    let handConfig = null;
+    for (const [fname, config] of Object.entries(handConfigs)) {
+      if (filename === fname) {
+        handConfig = config;
+        break;
+      }
+    }
+    
+    if (handConfig) {
+      const scale = handConfig.scale;
+      const tx = handConfig.offsetX;
+      const ty = handConfig.offsetY;
+      const rot = handConfig.rotation;
+      img.style.transform = `translate(-50%, -50%) scale(${scale}) translate(${tx}px, ${ty}px) rotate(${rot}deg)`;
+    } else if (/oak[-_]?ch[-_]?001/i.test(filename) || filename === "oak-ch-001.png") {
+      img.style.width = "60%";
+      img.style.height = "auto";
+    } else if (/^chronohands$/i.test(group)) {
+      img.style.width = "50%";
+      img.style.height = "auto";
+    }
+  } catch (e) {}
+
+  img.src = srcUrl;
+  document.body.appendChild(img);
+
+  function updatePosition() {
+  try {
+    const filename = String(layerEntry.file || "").split("/").pop().toLowerCase();
+    
+    // Check if this is a hand that needs custom config
+   const handConfigs = {
+  // OAK CHRONO HAND - with LEFT/RIGHT and UP/DOWN!
+  'oak-ch-001.png': { 
+    scale: 0.40, 
+    offsetX: 0,    // ⬅️ LEFT (-) or RIGHT (+)
+    offsetY: 1,   // ⬆️ UP (-) or DOWN (+)
+    rotation: 0 
+  },
+  
+  // SEITONA SUBDIAL HANDS
+  'seitona-sd-001.png': { 
+    scale: 0.25, 
+    offsetX: -2,   // Slightly LEFT
+    offsetY: 0,    // No vertical movement
+    rotation: 0 
+  },
+  'seitona-sd-002.png': { 
+    scale: 0.25, 
+    offsetX: 0,    // Centered horizontally
+    offsetY: 0,    // Centered vertically
+    rotation: -1   // Slight rotation
+  }
+};
+    
+    let handConfig = null;
+    for (const [fname, config] of Object.entries(handConfigs)) {
+      if (filename === fname) {
+        handConfig = config;
+        break;
+      }
+    }
+     let dateConfig = null;
+    const dateConfigs = {
+      'seikojust-dt-001.png': { scale: 0.6, offsetX: 46, offsetY: -14, rotation: 0 },
+      'seiko-just-dt-none.png': { scale: 0.6, offsetX: 46, offsetY: -14, rotation: 0 },
+      'seikomariner-dt-001.png': { scale: 0.17, offsetX: 42, offsetY: 20, rotation: 0 },
+      'seikomariner-dt-none.png': { scale: 0.17, offsetX: 46, offsetY: 11, rotation: 0 }
+    };
+    for (const [fname, config] of Object.entries(dateConfigs)) {
+      if (filename === fname) {
+        dateConfig = config;
+        break;
+      }
+    }
+    
+    img.style.setProperty("left", "50%", "important");
+    img.style.setProperty("top", "50%", "important");
+    
+    if (handConfig) {
+      const scale = handConfig.scale;
+      const tx = handConfig.offsetX;
+      const ty = handConfig.offsetY;
+      const rot = handConfig.rotation;
+      img.style.transform = `translate(-50%, -50%) scale(${scale}) translate(${tx}px, ${ty}px) rotate(${rot}deg)`;
+ } else if (dateConfig) {
+  const { scale, offsetX, offsetY, rotation } = dateConfig;
+  img.style.transform = `translate(-50%, -50%) scale(${scale}) translate(${offsetX}px, ${offsetY}px) rotate(${rotation}deg)`;
+
+    for (const [fname, config] of Object.entries(dateConfigs)) {
+      if (filename === fname) {
+        dateConfig = config;
+        break;
+      }
+    }
+    } else {
+      img.style.transform = `translate(-50%,-50%) scale(${watchScale})`;
+    }
+  } catch (err) {
+    img.style.setProperty("left", "50%", "important");
+    img.style.setProperty("top", "50%", "important");
+    img.style.transform = `translate(-50%,-50%) scale(${watchScale})`;
+  }
+
+
+      }
+
+      function finalizePosition() {
+        updatePosition();
+        requestAnimationFrame(() => {
+          img.style.visibility = "";
+          img.classList.add("visible");
+        });
+      }
+
+      if (img.complete && img.naturalWidth) {
+        setTimeout(finalizePosition, 0);
+      } else {
+        img.addEventListener("load", function onL() { try { img.removeEventListener("load", onL); } catch (e) {} finalizePosition(); }, { passive: true });
+        img.addEventListener("error", function onE() { try { img.removeEventListener("error", onE); } catch (e) {} finalizePosition(); }, { passive: true });
+      }
+
+     
+    }
+
+    updateChronoVisibility();
+    debouncedRender();
+
+    try {
+      container.__setWatch = function(centerPct, scale) {
+        try { if (typeof centerPct !== "undefined") container.dataset.watchCenter = String(centerPct); } catch(e){}
+        try { if (typeof scale !== "undefined") container.dataset.watchScale = String(scale); } catch(e){}
+        try { bumpRevision(); debouncedRender(); } catch(e) {}
+      };
+    } catch (e) {}
+  }
+
+  function init() {
+    const roots = document.querySelectorAll(rootSelector);
+    if (!roots.length) return;
+    fetchManifest().then((manifest) => {
+      roots.forEach((root) => {
+        try { buildUI(manifest, root); } catch (err) { console.error("Configurator buildUI error", err); root.innerHTML = '<div style="color:#900;padding:20px">Configurator render error. See console.</div>'; }
+      });
+    }).catch((err) => {
+      console.error("Configurator manifest error", err);
+      document.querySelectorAll(rootSelector).forEach((r) => { r.innerHTML = '<div style="color:#900;padding:20px">Configurator manifest load error. See console.</div>'; });
+    });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+
+})();
